@@ -1,0 +1,14 @@
+{
+  "name": "devtools-llm-failover",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types src/failover_decision.test.ts",
+    "run": "node --experimental-strip-types src/example.ts"
+  },
+  "dependencies": {
+    "openai": "^4.0.0",
+    "zod": "^3.0.0"
+  }
+}
+
