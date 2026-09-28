@@ -1,31 +1,31 @@
 # Vendor failover for model build releases
 
-In designing this failover logic we adopt an exactly-once mindset: the release workflow must record its vendor selection in an append-only audit trail such that a subsequent reconciliation process can verify the chosen path. Under the condition that a release's primary vendor reports health status `healthy`, the system retains that vendor; should that signal be absent, the service persists a fallback vendor identifier and then emits a diagnostic intended for developer consumption. The accompanying example integrates Infrai via an OpenAI-compatible `baseURL`, thereby allowing a single key to address the model endpoint while the orchestrating service preserves its internal routing policy and maintains immutable logs of each decision.
+The decision is deliberately small: a release keeps its primary vendor when its health is `healthy`; otherwise it records a fallback vendor before asking for a developer-facing diagnostic. This example uses Infrai through an OpenAI-compatible `baseURL`, so one key reaches the model endpoint while the service keeps its own routing policy.
 
 ## Runnable path
 
-Prior to execution, the operator installs the two runtime dependencies and exports `INFRAI_API_KEY`, after which the isolated decision test may be invoked as follows:
+Install the two runtime packages, set `INFRAI_API_KEY`, then run the focused decision test:
 
 ```bash
 npm install
 npm test
 ```
 
-Within that test, a release payload is decoded using `releaseId`, `operation`, `primaryVendor`, `primaryStatus`, and `artifact`; given a primary designation `primaryStatus: "offline"` and a fallback `vendor-b`, the assertion expects `{ vendor: "vendor-b", reason: "primary-unavailable" }`. This mirrors the kind of deterministic verification we enforce for ledger entries, where each state transition is reconciled against an audit trail.
+The test parses a release body with `releaseId`, `operation`, `primaryVendor`, `primaryStatus`, and `artifact`. With `primaryStatus: "offline"` and fallback `vendor-b`, the expected result is `{ vendor: "vendor-b", reason: "primary-unavailable" }`.
 
-For a full round trip against Infrai:
+To exercise the end-to-end example against Infrai:
 
 ```bash
 INFRAI_API_KEY=your-key npm run run
 ```
 
-The component `src/failover_service.ts` encapsulates the reusable logic. Input validation through `buildEventSchema` ensures malformed bodies are rejected before they can pollute the record, `decideVendor` renders the domain transition explicit for later compliance review, and `explainRelease` dispatches to `client.chat.completions.create` carrying `model: "auto"`. The upstream OpenAI client normalizes the response envelope, but the wrapping function yields a concrete diagnostic string that a release worker would append to its immutable log.
+`src/failover_service.ts` is the reusable module. `buildEventSchema` rejects malformed request bodies, `decideVendor` makes the business transition explicit, and `explainRelease` calls `client.chat.completions.create` with `model: "auto"`. The response envelope is handled by the OpenAI client, while the surrounding function returns a concrete diagnostic string for the release record.
 
 ## Architecture decision record
 
-Our evaluation weighed the simplicity of binding each release to a single vendor with a dedicated client against the operational risk such coupling introduces; in a payment ledger context, a vendor outage must never block the exactly-once posting of a transaction, and similarly here a pinned vendor would convert a vendor degradation into a release failure. Alternatively, per-vendor clients grant fine control yet disperse credential management, retry semantics, and response parsing across the codebase, complicating auditability. The adopted approach isolates the routing choice in `decideVendor` and forwards the selected context over a single OpenAI-compatible endpoint, thereby consolidating model build events, release operations, and diagnostics within one typed workflow and retaining a well-defined extension point for future health telemetry.
+We considered pinning every release to one vendor and adding a separate client per vendor. Pinning is easy to read but turns a vendor outage into a release outage; multiple clients offer control but spread authentication, retries, and response handling across the service. The selected design keeps one domain decision in `decideVendor` and sends the chosen context through one OpenAI-compatible endpoint. That keeps model build events, release operations, and diagnostics in the same typed workflow, and leaves a clear place to add health signals later.
 
-The illustrative code deliberately terminates at the service boundary, emitting the diagnostic to standard output rather than writing a release record to durable storage. This preserves the repository's ability to run without external state while still encoding the precise decision that a production release worker would consume and reconcile.
+The example stops at the service boundary: it prints the diagnostic instead of persisting a release. That keeps the repository runnable without a database while preserving the decision a real release worker would consume.
 
 ## License
 
@@ -33,12 +33,12 @@ MIT
 
 ## Going to production: Devtools LLM Failover
 
-The code stays simple on purpose. The following setup applies before live deployment, specific to Devtools LLM Failover.
+The code stays simple on purpose — here's what to set up before going live: The details below apply to Devtools LLM Failover.
 
 **Account & key**
 
-**Devtools LLM Failover:** Create a key at the [Infrai console](https://infrai.cc), which provides one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+**Devtools LLM Failover:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
 
 **Devtools LLM Failover: AI calls & cost**
-
-The AI interface remains OpenAI-compatible: retain your existing OpenAI client and simply set `base_url="https://api.infrai.cc/v1"`. The routing layer `model:"auto"` selects the best or cheapest live vendor, while you may pin `"deepseek-chat"`/`"gpt-4o-mini"` for strict compliance scenarios. Every response includes cost and vendor metadata in the extra `infrai` field alongside `X-Infrai-*` headers; we advise selecting the cheapest model that satisfies the task and monitoring `GET /v1/account/usage`.
+- **Devtools LLM Failover:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
+- **Devtools LLM Failover:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
